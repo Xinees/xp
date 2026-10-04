@@ -19,10 +19,108 @@ jobs:
         with:
           gradle-version: 8.1.1
 
+      - name: Assemble project
+        run: |
+          set -e
+          export LC_ALL=C
+          mapfile -t DIRS < <(find . -type d -path '*/main/java/com/backroomsport' -not -path './.git/*' -not -path './_build/*' | sort)
+          if [ "${#DIRS[@]}" -eq 0 ]; then
+            echo "ERROR: folder main/java/com/backroomsport not found in the repository"
+            find . -not -path './.git/*' -maxdepth 3
+            exit 1
+          fi
+          mkdir -p _build/src/main
+          for D in "${DIRS[@]}"; do
+            M="${D%/java/com/backroomsport}"
+            echo "Overlay: $M"
+            cp -r "$M"/. _build/src/main/
+          done
+
+          cat > _build/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  gradlePluginPortal()
+                  maven {
+                      name = 'MinecraftForge'
+                      url = 'https://maven.minecraftforge.net/'
+                  }
+              }
+          }
+          rootProject.name = 'xp_backrooms'
+          EOF
+
+          cat > _build/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3G
+          org.gradle.daemon=false
+          minecraft_version=1.20.1
+          forge_version=47.3.0
+          mapping_channel=official
+          mapping_version=1.20.1
+          geckolib_version=4.4.9
+          mod_id=xp_backrooms
+          mod_version=0.3.0
+          mod_group_id=com.backroomsport
+          EOF
+
+          cat > _build/build.gradle <<'EOF'
+          plugins {
+              id 'eclipse'
+              id 'idea'
+              id 'maven-publish'
+              id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+          }
+          version = mod_version
+          group = mod_group_id
+          base {
+              archivesName = mod_id
+          }
+          java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+          minecraft {
+              mappings channel: mapping_channel, version: mapping_version
+              runs {
+                  client {
+                      workingDirectory project.file('run')
+                      mods {
+                          "${mod_id}" {
+                              source sourceSets.main
+                          }
+                      }
+                  }
+              }
+          }
+          repositories {
+              maven {
+                  name = 'GeckoLib'
+                  url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
+              }
+          }
+          dependencies {
+              minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+              implementation fg.deobf("software.bernie.geckolib:geckolib-forge-${minecraft_version}:${geckolib_version}")
+          }
+          tasks.named('jar', Jar).configure {
+              manifest {
+                  attributes([
+                      'Specification-Title'   : mod_id,
+                      'Specification-Vendor'  : mod_group_id,
+                      'Specification-Version' : '1',
+                      'Implementation-Title'  : project.name,
+                      'Implementation-Version': project.jar.archiveVersion,
+                      'Implementation-Vendor' : mod_group_id
+                  ])
+              }
+              finalizedBy 'reobfJar'
+          }
+          tasks.withType(JavaCompile).configureEach {
+              options.encoding = 'UTF-8'
+          }
+          EOF
+
       - name: Build
+        working-directory: _build
         run: gradle build --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
           name: xp_backrooms-jar
-          path: build/libs/*.jar
+          path: _build/build/libs/*.jar
