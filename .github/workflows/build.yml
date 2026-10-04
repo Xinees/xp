@@ -1,4 +1,3 @@
-```yaml
 name: build
 
 on:
@@ -332,4 +331,3 @@ jobs:
           name: xp_backrooms
           path: dist/xp_backrooms.jar
           if-no-files-found: error
-```
