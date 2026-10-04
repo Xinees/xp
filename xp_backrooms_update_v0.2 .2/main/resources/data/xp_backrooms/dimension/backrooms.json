@@ -1,0 +1,16 @@
+{
+  "type": "xp_backrooms:backrooms",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "biome": "minecraft:the_void",
+      "features": false,
+      "lakes": false,
+      "structure_overrides": [],
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "xp_backrooms:lobby_carpet", "height": 3 }
+      ]
+    }
+  }
+}
