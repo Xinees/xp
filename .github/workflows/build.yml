@@ -9,130 +9,166 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ============================================================
+      # JAVA 17
+      # Minecraft 1.20.1 + Forge 47.3.0
+      # ============================================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
+      # ============================================================
+      # GRADLE
+      # ============================================================
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.1.1
 
       # ============================================================
-      # 1. СОБИРАЕМ ЕДИНЫЕ ИСХОДНИКИ:
+      # MERGE BASE + PATCH
       #
-      #    BASE
-      #      ↓
-      #    PATCH поверх BASE
-      #      ↓
-      #    ОДИН общий проект
+      # BASE:
+      # xp_backrooms_update_v0.2 .2/main
       #
-      # Если patch содержит файл с тем же путём, он заменяет
-      # файл основной версии.
+      # PATCH:
+      # zz_patch_03/xp_backrooms_update_v0.2.3/zz_patch_03/main
+      #
+      # Порядок:
+      #
+      # BASE
+      #   ↓
+      # PATCH поверх BASE
+      #   ↓
+      # ЕДИНЫЕ ИСХОДНИКИ
       # ============================================================
-      - name: Assemble base + patch
+      - name: Merge base and patch
         shell: bash
         run: |
           set -euo pipefail
           export LC_ALL=C
 
           BUILD="_build"
+
           BASE="xp_backrooms_update_v0.2 .2/main"
+          PATCH="zz_patch_03/xp_backrooms_update_v0.2.3/zz_patch_03/main"
 
           echo "========================================"
-          echo "Cleaning build directory"
+          echo "Checking source directories"
           echo "========================================"
+
+          if [ ! -d "$BASE" ]; then
+            echo "ERROR: BASE directory does not exist:"
+            echo "$BASE"
+            exit 1
+          fi
+
+          if [ ! -d "$PATCH" ]; then
+            echo "ERROR: PATCH directory does not exist:"
+            echo "$PATCH"
+            exit 1
+          fi
 
           rm -rf "$BUILD"
           mkdir -p "$BUILD/src/main"
 
-          # --------------------------------------------------------
-          # BASE
-          # --------------------------------------------------------
-          if [ ! -d "$BASE" ]; then
-            echo "ERROR: Base project not found:"
-            echo "  $BASE"
-            echo
-            echo "Repository tree:"
-            find . -maxdepth 4 -type d \
-              -not -path './.git/*' \
-              | sort
-            exit 1
-          fi
-
           echo
           echo "========================================"
-          echo "Applying BASE"
+          echo "COPY BASE"
           echo "========================================"
           echo "$BASE"
 
-          cp -a "$BASE"/. "$BUILD/src/main/"
+          rsync -a "$BASE"/ "$BUILD/src/main/"
 
-          # --------------------------------------------------------
-          # PATCH
-          # --------------------------------------------------------
           echo
           echo "========================================"
-          echo "Searching PATCH"
+          echo "COPY PATCH OVER BASE"
           echo "========================================"
+          echo "$PATCH"
 
-          mapfile -t PATCH_DIRS < <(
-            find ./zz_patch_03 \
-              -type d \
-              -path '*/main/java/com/backroomsport' \
-              -not -path './.git/*' \
-              -not -path './_build/*' \
-              | sort
-          )
+          rsync -a "$PATCH"/ "$BUILD/src/main/"
 
-          if [ "${#PATCH_DIRS[@]}" -eq 0 ]; then
-            echo "ERROR: Patch source not found inside zz_patch_03/"
-            echo
-            echo "Patch tree:"
-            find ./zz_patch_03 -maxdepth 8 -type f | sort
-            exit 1
-          fi
-
-          # --------------------------------------------------------
-          # Накладываем PATCH ПОСЛЕ BASE.
-          #
-          # Например:
-          #
-          # BASE:
-          #   com/backroomsport/XpBackrooms.java
-          #
-          # PATCH:
-          #   com/backroomsport/XpBackrooms.java
-          #
-          # После cp -a в _build останется PATCH-версия.
-          # --------------------------------------------------------
-          for D in "${PATCH_DIRS[@]}"; do
-            PATCH_ROOT="${D%/java/com/backroomsport}"
-
-            echo
-            echo "Applying PATCH:"
-            echo "  $PATCH_ROOT"
-
-            cp -a "$PATCH_ROOT"/. "$BUILD/src/main/"
-          done
-
-          # --------------------------------------------------------
-          # Показываем итоговое дерево перед компиляцией.
-          # --------------------------------------------------------
           echo
           echo "========================================"
-          echo "FINAL MERGED SOURCE TREE"
+          echo "MERGED SOURCE CREATED"
           echo "========================================"
 
           find "$BUILD/src/main" -type f | sort
 
       # ============================================================
-      # 2. Gradle settings
+      # VERY IMPORTANT VALIDATION
+      #
+      # Проверяем именно тот файл, который потом будет компилироваться.
+      #
+      # Эти 4 константы обязаны существовать.
+      # ============================================================
+      - name: Validate merged BacteriaEntity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="_build/src/main/java/com/backroomsport/entity/BacteriaEntity.java"
+
+          echo "========================================"
+          echo "VALIDATING:"
+          echo "$FILE"
+          echo "========================================"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: BacteriaEntity.java was not created."
+            exit 1
+          fi
+
+          echo
+          echo "File:"
+          ls -lh "$FILE"
+
+          echo
+          echo "SHA256:"
+          sha256sum "$FILE"
+
+          echo
+          echo "Constants found:"
+          grep -nE \
+            'private static final (int|double) (BURST_TICKS|TRIGGER_TICKS|SEARCH_TICKS|SEARCH_RADIUS)' \
+            "$FILE" || true
+
+          echo
+          echo "Checking required constants..."
+
+          grep -q 'BURST_TICKS' "$FILE" || {
+            echo "ERROR: BURST_TICKS is missing"
+            exit 1
+          }
+
+          grep -q 'TRIGGER_TICKS' "$FILE" || {
+            echo "ERROR: TRIGGER_TICKS is missing"
+            exit 1
+          }
+
+          grep -q 'SEARCH_TICKS' "$FILE" || {
+            echo "ERROR: SEARCH_TICKS is missing"
+            exit 1
+          }
+
+          grep -q 'SEARCH_RADIUS' "$FILE" || {
+            echo "ERROR: SEARCH_RADIUS is missing"
+            exit 1
+          }
+
+          echo
+          echo "All required Bacteria constants are present."
+
+      # ============================================================
+      # GRADLE SETTINGS
       # ============================================================
       - name: Create settings.gradle
         shell: bash
@@ -155,7 +191,7 @@ jobs:
           EOF
 
       # ============================================================
-      # 3. Gradle properties
+      # GRADLE PROPERTIES
       # ============================================================
       - name: Create gradle.properties
         shell: bash
@@ -180,7 +216,7 @@ jobs:
           EOF
 
       # ============================================================
-      # 4. Gradle build script
+      # BUILD.GRADLE
       # ============================================================
       - name: Create build.gradle
         shell: bash
@@ -256,7 +292,10 @@ jobs:
           EOF
 
       # ============================================================
-      # 5. ОДИН общий build
+      # BUILD
+      #
+      # И BASE, и PATCH уже находятся в одном source tree.
+      # Компилируется всё одним Gradle/ForgeGradle.
       # ============================================================
       - name: Build merged mod
         working-directory: _build
@@ -269,13 +308,7 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # 6. Забираем ТОЛЬКО итоговый reobf JAR
-      #
-      # Не отдаём одновременно:
-      #   xp_backrooms-0.3.0.jar
-      #   xp_backrooms-0.3.0-reobf.jar
-      #
-      # Пользователю нужен один готовый мод.
+      # PREPARE ONE FINAL JAR
       # ============================================================
       - name: Prepare final JAR
         shell: bash
@@ -292,22 +325,30 @@ jobs:
 
           if [ -z "$REOBF_JAR" ]; then
             echo "ERROR: reobf JAR was not created."
+
             echo
-            echo "Files in _build/build/libs:"
-            find _build/build/libs -maxdepth 1 -type f -printf '%f\n' | sort
+            echo "Contents of _build/build/libs:"
+            find _build/build/libs \
+              -maxdepth 1 \
+              -type f \
+              -printf '%f\n' \
+              | sort
+
             exit 1
           fi
 
-          cp "$REOBF_JAR" "dist/xp_backrooms.jar"
+          cp "$REOBF_JAR" dist/xp_backrooms.jar
 
           echo
           echo "========================================"
-          echo "FINAL MOD:"
+          echo "FINAL JAR"
           echo "========================================"
-          ls -lh "dist/xp_backrooms.jar"
+
+          ls -lh dist/xp_backrooms.jar
+          sha256sum dist/xp_backrooms.jar
 
       # ============================================================
-      # 7. ONE artifact
+      # ONE ARTIFACT
       # ============================================================
       - name: Upload final mod
         uses: actions/upload-artifact@v4
