@@ -1,0 +1,8 @@
+{
+  "entity.xp_backrooms.bacteria": "Бактерия",
+  "item.xp_backrooms.bacteria_spawn_egg": "Яйцо призыва Бактерии",
+  "block.xp_backrooms.lobby_carpet": "Ковёр Лобби",
+  "block.xp_backrooms.lobby_striped_wallpaper": "Полосатые обои Лобби",
+  "block.xp_backrooms.lobby_ceiling_panel": "Потолочная панель Лобби",
+  "block.xp_backrooms.lobby_ceiling_light": "Потолочная лампа Лобби"
+}
