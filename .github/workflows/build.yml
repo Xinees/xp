@@ -34,6 +34,20 @@ jobs:
 
       # ============================================================
       # MERGE BASE + PATCH
+      #
+      # BASE:
+      # xp_backrooms_update_v0.2 .2/main
+      #
+      # PATCH:
+      # zz_patch_03/xp_backrooms_update_v0.2.3/zz_patch_03/main
+      #
+      # Порядок:
+      #
+      # BASE
+      #   ↓
+      # PATCH поверх BASE
+      #   ↓
+      # ЕДИНЫЕ ИСХОДНИКИ
       # ============================================================
       - name: Merge base and patch
         shell: bash
@@ -284,6 +298,11 @@ jobs:
 
       # ============================================================
       # PREPARE ONE FINAL JAR
+      #
+      # Gradle в текущей сборке создаёт:
+      # xp_backrooms-0.3.0.jar
+      #
+      # Поэтому ищем любой JAR, а не только *-reobf.jar.
       # ============================================================
       - name: Prepare final JAR
         shell: bash
@@ -292,17 +311,17 @@ jobs:
 
           mkdir -p dist
 
-          REOBF_JAR="$(find _build/build/libs \
+          JAR="$(find _build/build/libs \
             -maxdepth 1 \
             -type f \
-            -name '*-reobf.jar' \
+            -name '*.jar' \
             | head -n 1)"
 
-          if [ -z "$REOBF_JAR" ]; then
-            echo "ERROR: reobf JAR was not created."
+          if [ -z "$JAR" ]; then
+            echo "ERROR: No JAR was created."
 
             echo
-            echo "Contents of build/libs:"
+            echo "Contents of _build/build/libs:"
             find _build/build/libs \
               -maxdepth 1 \
               -type f \
@@ -312,7 +331,10 @@ jobs:
             exit 1
           fi
 
-          cp "$REOBF_JAR" dist/xp_backrooms.jar
+          echo "Found JAR:"
+          echo "$JAR"
+
+          cp "$JAR" dist/xp_backrooms.jar
 
           echo
           echo "========================================"
