@@ -7,60 +7,185 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: gradle/actions/setup-gradle@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.1.1
 
-      - name: Assemble project
+      # ============================================================
+      # 1. СОБИРАЕМ ЕДИНЫЕ ИСХОДНИКИ:
+      #
+      #    BASE
+      #      ↓
+      #    PATCH поверх BASE
+      #      ↓
+      #    ОДИН общий проект
+      #
+      # Если patch содержит файл с тем же путём, он заменяет
+      # файл основной версии.
+      # ============================================================
+      - name: Assemble base + patch
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           export LC_ALL=C
-          mapfile -t DIRS < <(find . -type d -path '*/main/java/com/backroomsport' -not -path './.git/*' -not -path './_build/*' | sort)
-          if [ "${#DIRS[@]}" -eq 0 ]; then
-            echo "ERROR: folder main/java/com/backroomsport not found in the repository"
-            find . -not -path './.git/*' -maxdepth 3
+
+          BUILD="_build"
+          BASE="xp_backrooms_update_v0.2 .2/main"
+
+          echo "========================================"
+          echo "Cleaning build directory"
+          echo "========================================"
+
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD/src/main"
+
+          # --------------------------------------------------------
+          # BASE
+          # --------------------------------------------------------
+          if [ ! -d "$BASE" ]; then
+            echo "ERROR: Base project not found:"
+            echo "  $BASE"
+            echo
+            echo "Repository tree:"
+            find . -maxdepth 4 -type d \
+              -not -path './.git/*' \
+              | sort
             exit 1
           fi
-          mkdir -p _build/src/main
-          for D in "${DIRS[@]}"; do
-            M="${D%/java/com/backroomsport}"
-            echo "Overlay: $M"
-            cp -r "$M"/. _build/src/main/
+
+          echo
+          echo "========================================"
+          echo "Applying BASE"
+          echo "========================================"
+          echo "$BASE"
+
+          cp -a "$BASE"/. "$BUILD/src/main/"
+
+          # --------------------------------------------------------
+          # PATCH
+          # --------------------------------------------------------
+          echo
+          echo "========================================"
+          echo "Searching PATCH"
+          echo "========================================"
+
+          mapfile -t PATCH_DIRS < <(
+            find ./zz_patch_03 \
+              -type d \
+              -path '*/main/java/com/backroomsport' \
+              -not -path './.git/*' \
+              -not -path './_build/*' \
+              | sort
+          )
+
+          if [ "${#PATCH_DIRS[@]}" -eq 0 ]; then
+            echo "ERROR: Patch source not found inside zz_patch_03/"
+            echo
+            echo "Patch tree:"
+            find ./zz_patch_03 -maxdepth 8 -type f | sort
+            exit 1
+          fi
+
+          # --------------------------------------------------------
+          # Накладываем PATCH ПОСЛЕ BASE.
+          #
+          # Например:
+          #
+          # BASE:
+          #   com/backroomsport/XpBackrooms.java
+          #
+          # PATCH:
+          #   com/backroomsport/XpBackrooms.java
+          #
+          # После cp -a в _build останется PATCH-версия.
+          # --------------------------------------------------------
+          for D in "${PATCH_DIRS[@]}"; do
+            PATCH_ROOT="${D%/java/com/backroomsport}"
+
+            echo
+            echo "Applying PATCH:"
+            echo "  $PATCH_ROOT"
+
+            cp -a "$PATCH_ROOT"/. "$BUILD/src/main/"
           done
+
+          # --------------------------------------------------------
+          # Показываем итоговое дерево перед компиляцией.
+          # --------------------------------------------------------
+          echo
+          echo "========================================"
+          echo "FINAL MERGED SOURCE TREE"
+          echo "========================================"
+
+          find "$BUILD/src/main" -type f | sort
+
+      # ============================================================
+      # 2. Gradle settings
+      # ============================================================
+      - name: Create settings.gradle
+        shell: bash
+        run: |
+          set -euo pipefail
 
           cat > _build/settings.gradle <<'EOF'
           pluginManagement {
               repositories {
                   gradlePluginPortal()
+
                   maven {
                       name = 'MinecraftForge'
                       url = 'https://maven.minecraftforge.net/'
                   }
               }
           }
+
           rootProject.name = 'xp_backrooms'
           EOF
+
+      # ============================================================
+      # 3. Gradle properties
+      # ============================================================
+      - name: Create gradle.properties
+        shell: bash
+        run: |
+          set -euo pipefail
 
           cat > _build/gradle.properties <<'EOF'
           org.gradle.jvmargs=-Xmx3G
           org.gradle.daemon=false
+
           minecraft_version=1.20.1
           forge_version=47.3.0
+
           mapping_channel=official
           mapping_version=1.20.1
+
           geckolib_version=4.4.9
+
           mod_id=xp_backrooms
           mod_version=0.3.0
           mod_group_id=com.backroomsport
           EOF
+
+      # ============================================================
+      # 4. Gradle build script
+      # ============================================================
+      - name: Create build.gradle
+        shell: bash
+        run: |
+          set -euo pipefail
 
           cat > _build/build.gradle <<'EOF'
           plugins {
@@ -69,17 +194,23 @@ jobs:
               id 'maven-publish'
               id 'net.minecraftforge.gradle' version '[6.0,6.2)'
           }
+
           version = mod_version
           group = mod_group_id
+
           base {
               archivesName = mod_id
           }
+
           java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
           minecraft {
               mappings channel: mapping_channel, version: mapping_version
+
               runs {
                   client {
                       workingDirectory project.file('run')
+
                       mods {
                           "${mod_id}" {
                               source sourceSets.main
@@ -88,16 +219,22 @@ jobs:
                   }
               }
           }
+
           repositories {
               maven {
                   name = 'GeckoLib'
                   url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
               }
           }
+
           dependencies {
               minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
-              implementation fg.deobf("software.bernie.geckolib:geckolib-forge-${minecraft_version}:${geckolib_version}")
+
+              implementation fg.deobf(
+                  "software.bernie.geckolib:geckolib-forge-${minecraft_version}:${geckolib_version}"
+              )
           }
+
           tasks.named('jar', Jar).configure {
               manifest {
                   attributes([
@@ -109,18 +246,72 @@ jobs:
                       'Implementation-Vendor' : mod_group_id
                   ])
               }
+
               finalizedBy 'reobfJar'
           }
+
           tasks.withType(JavaCompile).configureEach {
               options.encoding = 'UTF-8'
           }
           EOF
 
-      - name: Build
+      # ============================================================
+      # 5. ОДИН общий build
+      # ============================================================
+      - name: Build merged mod
         working-directory: _build
-        run: gradle build --no-daemon --stacktrace
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - uses: actions/upload-artifact@v4
+          gradle build \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # 6. Забираем ТОЛЬКО итоговый reobf JAR
+      #
+      # Не отдаём одновременно:
+      #   xp_backrooms-0.3.0.jar
+      #   xp_backrooms-0.3.0-reobf.jar
+      #
+      # Пользователю нужен один готовый мод.
+      # ============================================================
+      - name: Prepare final JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          REOBF_JAR="$(find _build/build/libs \
+            -maxdepth 1 \
+            -type f \
+            -name '*-reobf.jar' \
+            | head -n 1)"
+
+          if [ -z "$REOBF_JAR" ]; then
+            echo "ERROR: reobf JAR was not created."
+            echo
+            echo "Files in _build/build/libs:"
+            find _build/build/libs -maxdepth 1 -type f -printf '%f\n' | sort
+            exit 1
+          fi
+
+          cp "$REOBF_JAR" "dist/xp_backrooms.jar"
+
+          echo
+          echo "========================================"
+          echo "FINAL MOD:"
+          echo "========================================"
+          ls -lh "dist/xp_backrooms.jar"
+
+      # ============================================================
+      # 7. ONE artifact
+      # ============================================================
+      - name: Upload final mod
+        uses: actions/upload-artifact@v4
         with:
-          name: xp_backrooms-jar
-          path: _build/build/libs/*.jar
+          name: xp_backrooms
+          path: dist/xp_backrooms.jar
+          if-no-files-found: error
