@@ -23,6 +23,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.control.JumpControl;
 import net.minecraft.world.entity.ai.control.MoveControl;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
@@ -94,8 +95,7 @@ public class BacteriaEntity extends Monster implements GeoEntity {
     private static final double LOSE_DISTANCE = 64.0D;
     private static final int TRACK_TIMEOUT_TICKS = 160;   // 8 s without seeing or hearing the player: stop tracking, start searching
     private static final int KILL_TICKS = 37;              // Bedrock: duration 2 s * 0.925
-    // Distance from the monster to the player during the grab. The Bedrock script uses 1.15; 0.9 fills the screen more.
-    private static final double GRAB_DISTANCE = 0.9D;
+    private static final double GRAB_DISTANCE = 1.15D;     // viewOffsets.offset z
     private static final float GRAB_PITCH = -10.0F;        // viewOffsets.headRotation x (looking slightly up)
     private static final int ATTACK_ANIM_TICKS = 34;       // 1.5 s animation + 4 tick blend
     private static final int ATTACK_COOLDOWN = 20;
@@ -158,7 +158,6 @@ public class BacteriaEntity extends Monster implements GeoEntity {
     // client side attack animation bookkeeping
     private int lastAttackSerial = Integer.MIN_VALUE;
     private int attackAnimTicks = 0;
-    private int clientKillTicks = 0;
     private int screamTimer;
     private int screamLeft;
     private int wailDelay = -1;
@@ -186,6 +185,7 @@ public class BacteriaEntity extends Monster implements GeoEntity {
         this.xpReward = 0;
         this.noCulling = true; // Bedrock: should_update_bones_and_effects_offscreen = true
         this.moveControl = new BacteriaMoveControl(this);
+        this.jumpControl = new NoJumpControl(this); // the Backrooms have no ledges: the mob never jumps
     }
 
     public static AttributeSupplier.Builder createAttributes() {
@@ -316,7 +316,6 @@ public class BacteriaEntity extends Monster implements GeoEntity {
             if (this.attackAnimTicks > 0) {
                 this.attackAnimTicks--;
             }
-            this.clientKillTicks = getState() == STATE_KILLING ? this.clientKillTicks + 1 : 0;
             clientFallbackSteps();
             return;
         }
@@ -411,6 +410,17 @@ public class BacteriaEntity extends Monster implements GeoEntity {
         return best;
     }
 
+    /** Swallows every jump request (vanilla movement, pathfinding and my own code), so the mob never hops. */
+    private static class NoJumpControl extends JumpControl {
+        NoJumpControl(BacteriaEntity mob) {
+            super(mob);
+        }
+
+        @Override
+        public void jump() {
+        }
+    }
+
     // ------------------------------------------------------------------ brain helpers
 
     private void setTurn(float degreesPerTick) {
@@ -436,12 +446,6 @@ public class BacteriaEntity extends Monster implements GeoEntity {
         this.setYRot(yaw);
         this.yBodyRot = yaw;
         this.setYHeadRot(yaw);
-    }
-
-    private void hop() {
-        if (this.onGround()) {
-            this.getJumpControl().jump();
-        }
     }
 
     private static void remember(Deque<Vec3> memory, Vec3 spot) {
@@ -538,7 +542,7 @@ public class BacteriaEntity extends Monster implements GeoEntity {
 
     /**
      * Call every tick while the mob is meant to be walking. Notices when it makes no progress and tries, in order:
-     * a new path and a hop, a sidestep, smashing what is in front of it. Returns true when nothing helped and the
+     * a new path, a sidestep, smashing what is in front of it. Returns true when nothing helped and the
      * current goal should be dropped.
      */
     private boolean updateStuck(boolean shouldMove) {
@@ -569,12 +573,10 @@ public class BacteriaEntity extends Monster implements GeoEntity {
             case 1 -> {
                 this.getNavigation().stop();
                 this.nextRepathTick = 0;
-                hop();
             }
             case 2 -> startSidestep();
             case 3 -> {
                 breakBlocksAhead();
-                hop();
             }
             default -> {
                 this.stuckLevel = 0;
@@ -845,11 +847,6 @@ public class BacteriaEntity extends Monster implements GeoEntity {
         if (updateStuck(!touching)) {
             startSearch();
             return;
-        }
-
-        // a hop helps when the mob is pushed straight against something; while a path drives it vanilla jumps by itself
-        if (this.horizontalCollision && this.onGround() && (this.getNavigation().isDone() || this.stuckLevel > 0)) {
-            this.getJumpControl().jump();
         }
 
         if (this.tickCount % 3 == 0) {
@@ -1193,11 +1190,6 @@ public class BacteriaEntity extends Monster implements GeoEntity {
         controllers.add(arms);
     }
 
-    /** Animation time of the kill animation in seconds (it starts after the 4 tick blend). Client side. */
-    public double getKillAnimSeconds(float partialTick) {
-        return Math.max(0.0D, (this.clientKillTicks + partialTick - 4.0D) / 20.0D);
-    }
-
     private boolean isAnimMoving() {
         return this.stillTicks < 6;
     }
@@ -1342,10 +1334,7 @@ public class BacteriaEntity extends Monster implements GeoEntity {
         AnimationController<BacteriaEntity> controller = state.getController();
         controller.setAnimationSpeed(1.0D);
         if (phase == STATE_KILLING) {
-            // The whole kill animation is played by the movement controller. kill.overlay is additive in Bedrock,
-            // but a second GeckoLib controller on the same bones would overwrite it with its zero keyframes,
-            // so only its shaking is added in BacteriaModel.
-            return PlayState.STOP;
+            return state.setAndContinue(ANIM_KILL_OVERLAY);
         }
         if (this.attackAnimTicks > 0) {
             return state.setAndContinue((this.lastAttackSerial & 1) == 0 ? ANIM_ATTACK_A : ANIM_ATTACK_B);
