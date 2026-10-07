@@ -7,349 +7,45 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ============================================================
-      # JAVA 17
-      # ============================================================
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # ============================================================
-      # GRADLE
-      # ============================================================
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.1.1
 
-      # ============================================================
-      # MERGE BASE + PATCH
-      #
-      # BASE:
-      # xp_backrooms_update_v0.2 .2/main
-      #
-      # PATCH:
-      # zz_patch_03/xp_backrooms_update_v0.2.3/zz_patch_03/main
-      #
-      # Порядок:
-      #
-      # BASE
-      #   ↓
-      # PATCH поверх BASE
-      #   ↓
-      # ЕДИНЫЕ ИСХОДНИКИ
-      # ============================================================
-      - name: Merge base and patch
-        shell: bash
+      - name: Prepare project
+        id: find
         run: |
-          set -euo pipefail
-          export LC_ALL=C
-
-          BUILD="_build"
-
-          BASE="xp_backrooms_update_v0.2 .2/main"
-          PATCH="zz_patch_03/xp_backrooms_update_v0.2.3/zz_patch_03/main"
-
-          echo "========================================"
-          echo "Checking directories"
-          echo "========================================"
-
-          test -d "$BASE" || {
-            echo "ERROR: BASE not found:"
-            echo "$BASE"
-            exit 1
-          }
-
-          test -d "$PATCH" || {
-            echo "ERROR: PATCH not found:"
-            echo "$PATCH"
-            exit 1
-          }
-
-          rm -rf "$BUILD"
-          mkdir -p "$BUILD/src/main"
-
-          # ----------------------------------------------------------
-          # 1. BASE
-          # ----------------------------------------------------------
-          echo
-          echo "========================================"
-          echo "COPYING BASE"
-          echo "========================================"
-
-          rsync -a "$BASE"/ "$BUILD/src/main/"
-
-          # ----------------------------------------------------------
-          # 2. PATCH
-          # ----------------------------------------------------------
-          echo
-          echo "========================================"
-          echo "COPYING PATCH"
-          echo "========================================"
-
-          rsync -a "$PATCH"/ "$BUILD/src/main/"
-
-          # ----------------------------------------------------------
-          # 3. FIX PATCHED BacteriaEntity
-          #
-          # Patch-версия использует эти константы, но не содержит
-          # их объявлений.
-          #
-          # Берём значения из BASE.
-          # ----------------------------------------------------------
-          BASE_BACTERIA="$BASE/java/com/backroomsport/entity/BacteriaEntity.java"
-          MERGED_BACTERIA="$BUILD/src/main/java/com/backroomsport/entity/BacteriaEntity.java"
-
-          echo
-          echo "========================================"
-          echo "VALIDATING BacteriaEntity"
-          echo "========================================"
-
-          test -f "$MERGED_BACTERIA" || {
-            echo "ERROR: merged BacteriaEntity.java does not exist"
-            exit 1
-          }
-
-          # Проверяем, присутствуют ли уже определения.
-          if ! grep -q 'private static final int BURST_TICKS' "$MERGED_BACTERIA"; then
-            echo "Restoring BURST_TICKS from BASE"
-            BURST_VALUE="$(grep 'private static final int BURST_TICKS' "$BASE_BACTERIA" | head -n 1)"
-            sed -i "/private static final double SPRINT_BLOCKS_PER_ANIM_SECOND/a\\    $BURST_VALUE" "$MERGED_BACTERIA"
+          set -e
+          SEARCH=.
+          if [ -f project.zip ]; then
+            echo "Using project.zip"
+            rm -rf _build
+            mkdir _build
+            unzip -q project.zip -d _build
+            SEARCH=_build
           fi
-
-          if ! grep -q 'private static final int TRIGGER_TICKS' "$MERGED_BACTERIA"; then
-            echo "Restoring TRIGGER_TICKS from BASE"
-            TRIGGER_VALUE="$(grep 'private static final int TRIGGER_TICKS' "$BASE_BACTERIA" | head -n 1)"
-            sed -i "/private static final int BURST_TICKS/a\\    $TRIGGER_VALUE" "$MERGED_BACTERIA"
-          fi
-
-          if ! grep -q 'private static final int SEARCH_TICKS' "$MERGED_BACTERIA"; then
-            echo "Restoring SEARCH_TICKS from BASE"
-            SEARCH_TICKS_VALUE="$(grep 'private static final int SEARCH_TICKS' "$BASE_BACTERIA" | head -n 1)"
-            sed -i "/private static final int TRIGGER_TICKS/a\\    $SEARCH_TICKS_VALUE" "$MERGED_BACTERIA"
-          fi
-
-          if ! grep -q 'private static final double SEARCH_RADIUS' "$MERGED_BACTERIA"; then
-            echo "Restoring SEARCH_RADIUS from BASE"
-            SEARCH_RADIUS_VALUE="$(grep 'private static final double SEARCH_RADIUS' "$BASE_BACTERIA" | head -n 1)"
-            sed -i "/private static final int SEARCH_TICKS/a\\    $SEARCH_RADIUS_VALUE" "$MERGED_BACTERIA"
-          fi
-
-          echo
-          echo "========================================"
-          echo "FINAL BacteriaEntity CONSTANTS"
-          echo "========================================"
-
-          grep -nE \
-            'private static final (int|double) (BURST_TICKS|TRIGGER_TICKS|SEARCH_TICKS|SEARCH_RADIUS)' \
-            "$MERGED_BACTERIA"
-
-          echo
-          echo "========================================"
-          echo "SOURCE MERGE COMPLETE"
-          echo "========================================"
-
-      # ============================================================
-      # GRADLE SETTINGS
-      # ============================================================
-      - name: Create settings.gradle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > _build/settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  gradlePluginPortal()
-
-                  maven {
-                      name = 'MinecraftForge'
-                      url = 'https://maven.minecraftforge.net/'
-                  }
-              }
-          }
-
-          rootProject.name = 'xp_backrooms'
-          EOF
-
-      # ============================================================
-      # GRADLE PROPERTIES
-      # ============================================================
-      - name: Create gradle.properties
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > _build/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx3G
-          org.gradle.daemon=false
-
-          minecraft_version=1.20.1
-          forge_version=47.3.0
-
-          mapping_channel=official
-          mapping_version=1.20.1
-
-          geckolib_version=4.4.9
-
-          mod_id=xp_backrooms
-          mod_version=0.3.0
-          mod_group_id=com.backroomsport
-          EOF
-
-      # ============================================================
-      # BUILD.GRADLE
-      # ============================================================
-      - name: Create build.gradle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > _build/build.gradle <<'EOF'
-          plugins {
-              id 'eclipse'
-              id 'idea'
-              id 'maven-publish'
-              id 'net.minecraftforge.gradle' version '[6.0,6.2)'
-          }
-
-          version = mod_version
-          group = mod_group_id
-
-          base {
-              archivesName = mod_id
-          }
-
-          java.toolchain.languageVersion = JavaLanguageVersion.of(17)
-
-          minecraft {
-              mappings channel: mapping_channel, version: mapping_version
-
-              runs {
-                  client {
-                      workingDirectory project.file('run')
-
-                      mods {
-                          "${mod_id}" {
-                              source sourceSets.main
-                          }
-                      }
-                  }
-              }
-          }
-
-          repositories {
-              maven {
-                  name = 'GeckoLib'
-                  url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
-              }
-          }
-
-          dependencies {
-              minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
-
-              implementation fg.deobf(
-                  "software.bernie.geckolib:geckolib-forge-${minecraft_version}:${geckolib_version}"
-              )
-          }
-
-          tasks.named('jar', Jar).configure {
-              manifest {
-                  attributes([
-                      'Specification-Title'   : mod_id,
-                      'Specification-Vendor'  : mod_group_id,
-                      'Specification-Version' : '1',
-                      'Implementation-Title'  : project.name,
-                      'Implementation-Version': project.jar.archiveVersion,
-                      'Implementation-Vendor' : mod_group_id
-                  ])
-              }
-
-              finalizedBy 'reobfJar'
-          }
-
-          tasks.withType(JavaCompile).configureEach {
-              options.encoding = 'UTF-8'
-          }
-          EOF
-
-      # ============================================================
-      # ONE BUILD
-      # ============================================================
-      - name: Build merged mod
-        working-directory: _build
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gradle build \
-            --no-daemon \
-            --stacktrace
-
-      # ============================================================
-      # PREPARE ONE FINAL JAR
-      #
-      # Gradle в текущей сборке создаёт:
-      # xp_backrooms-0.3.0.jar
-      #
-      # Поэтому ищем любой JAR, а не только *-reobf.jar.
-      # ============================================================
-      - name: Prepare final JAR
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p dist
-
-          JAR="$(find _build/build/libs \
-            -maxdepth 1 \
-            -type f \
-            -name '*.jar' \
-            | head -n 1)"
-
-          if [ -z "$JAR" ]; then
-            echo "ERROR: No JAR was created."
-
-            echo
-            echo "Contents of _build/build/libs:"
-            find _build/build/libs \
-              -maxdepth 1 \
-              -type f \
-              -printf '%f\n' \
-              | sort
-
+          FILE=$(find "$SEARCH" -name settings.gradle -not -path './.git/*' | awk '{print length($0) " " $0}' | sort -n | head -n 1 | cut -d' ' -f2-)
+          if [ -z "$FILE" ]; then
+            echo "ERROR: settings.gradle was not found. Upload project.zip to the repository root. Repository content:"
+            find . -not -path './.git/*' -maxdepth 3
             exit 1
           fi
+          DIR=$(dirname "$FILE")
+          echo "Project folder: $DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
-          echo "Found JAR:"
-          echo "$JAR"
+      - name: Build
+        working-directory: ${{ steps.find.outputs.dir }}
+        run: gradle build --no-daemon --stacktrace
 
-          cp "$JAR" dist/xp_backrooms.jar
-
-          echo
-          echo "========================================"
-          echo "FINAL JAR"
-          echo "========================================"
-
-          ls -lh dist/xp_backrooms.jar
-          sha256sum dist/xp_backrooms.jar
-
-      # ============================================================
-      # ONE ARTIFACT
-      # ============================================================
-      - name: Upload final mod
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: xp_backrooms
-          path: dist/xp_backrooms.jar
-          if-no-files-found: error
+          name: xp_backrooms-jar
+          path: ${{ steps.find.outputs.dir }}/build/libs/*.jar
